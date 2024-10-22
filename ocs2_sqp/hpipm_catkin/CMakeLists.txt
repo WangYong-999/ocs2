@@ -5,7 +5,6 @@ project(hpipm_catkin)
 find_package(catkin REQUIRED COMPONENTS
   blasfeo_catkin
   ocs2_core
-  ocs2_oc
   ocs2_qp_solver
 )
 
@@ -37,7 +36,8 @@ set(HPIPM_TESTING OFF CACHE BOOL "Examples enabled")
 # Download & build source
 FetchContent_Declare(hpipmDownload
   GIT_REPOSITORY https://github.com/giaf/hpipm
-  GIT_TAG 255ffdf38d3a5e2c3285b29568ce65ae286e5faf
+  # GIT_TAG 255ffdf38d3a5e2c3285b29568ce65ae286e5faf
+  GIT_TAG c1184a7ed9e0a507529a27a4c6372aefeb7b44fc
   UPDATE_COMMAND ""
   SOURCE_DIR ${HPIPM_DOWNLOAD_DIR}
   BINARY_DIR ${HPIPM_BUILD_DIR}
@@ -80,6 +80,7 @@ include_directories(
 add_library(${PROJECT_NAME}
   src/HpipmInterface.cpp
   src/HpipmInterfaceSettings.cpp
+  src/OcpSize.cpp
 )
 add_dependencies(${PROJECT_NAME}
   ${catkin_EXPORTED_TARGETS}

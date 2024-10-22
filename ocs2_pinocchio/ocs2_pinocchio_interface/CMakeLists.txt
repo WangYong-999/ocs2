@@ -14,12 +14,10 @@ find_package(catkin REQUIRED COMPONENTS
 )
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(pinocchio REQUIRED pinocchio)
+# pkg_check_modules(pinocchio REQUIRED pinocchio)
+find_package(pinocchio REQUIRED)
 
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
-
-# Add pinocchio configurations
-include(cmake/pinocchio_config.cmake)
 
 ###################################
 ## catkin specific configuration ##
@@ -28,26 +26,36 @@ include(cmake/pinocchio_config.cmake)
 catkin_package(
   INCLUDE_DIRS
     include
-    ${pinocchio_INCLUDE_DIRS}
   LIBRARIES
     ${PROJECT_NAME}
   CATKIN_DEPENDS
     ${CATKIN_PACKAGE_DEPENDENCIES}
   DEPENDS
     pinocchio
-  CFG_EXTRAS
-    pinocchio_config.cmake
 )
 
 ###########
 ## Build ##
 ###########
 
+set(FLAGS
+  ${OCS2_CXX_FLAGS}
+  ${pinocchio_CFLAGS_OTHER}
+  -Wno-ignored-attributes
+  -Wno-invalid-partial-specialization   # to silence warning with unsupported Eigen Tensor
+  -DPINOCCHIO_URDFDOM_TYPEDEF_SHARED_PTR
+  -DPINOCCHIO_URDFDOM_USE_STD_SHARED_PTR
+)
+
 include_directories(
   include
   ${catkin_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIRS}
   ${pinocchio_INCLUDE_DIRS}
+)
+
+link_directories(
+  ${pinocchio_LIBRARY_DIRS}
 )
 
 # ocs2 pinocchio interface library
@@ -65,7 +73,7 @@ target_link_libraries(${PROJECT_NAME}
   ${catkin_LIBRARIES}
   ${pinocchio_LIBRARIES}
 )
-target_compile_options(${PROJECT_NAME} PUBLIC ${OCS2_PINOCCHIO_FLAGS})
+target_compile_options(${PROJECT_NAME} PUBLIC ${FLAGS})
 
 ####################
 ## Clang tooling ###

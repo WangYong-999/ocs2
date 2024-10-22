@@ -59,6 +59,37 @@ void StateInputConstraintCppAd::initialize(size_t stateDim, size_t inputDim, siz
   }
 }
 
+void StateInputConstraintCppAd::initialize(size_t stateDim, size_t inputDim,
+        ad_vector_t tapedParameterValue, const std::string& modelName, const
+        std::string& modelFolder, bool recompileLibraries, bool verbose) {
+
+  auto constraintAd = [=](const ad_vector_t& x, const ad_vector_t& p, ad_vector_t& y) {
+    assert(x.rows() == 1 + stateDim + inputDim);
+    const ad_scalar_t time = x(0);
+    const ad_vector_t state = x.segment(1, stateDim);
+    const ad_vector_t input = x.tail(inputDim);
+    y = this->constraintFunction(time, state, input, p);
+  };
+  adInterfacePtr_.reset(new ocs2::CppAdInterface(constraintAd, 1 + stateDim + inputDim, tapedParameterValue.size(), modelName, modelFolder));
+
+  // pass taped parameters through
+  adInterfacePtr_->setTapedParameterValue(tapedParameterValue);
+
+  ocs2::CppAdInterface::ApproximationOrder orderCppAd;
+  if (getOrder() == ConstraintOrder::Linear) {
+    orderCppAd = ocs2::CppAdInterface::ApproximationOrder::First;
+  } else {
+    orderCppAd = ocs2::CppAdInterface::ApproximationOrder::Second;
+  }
+
+  if (recompileLibraries) {
+    adInterfacePtr_->createModels(orderCppAd, verbose);
+  } else {
+    adInterfacePtr_->loadModelsIfAvailable(orderCppAd, verbose);
+  }
+
+}
+
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/
@@ -68,24 +99,22 @@ StateInputConstraintCppAd::StateInputConstraintCppAd(const StateInputConstraintC
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/
-vector_t StateInputConstraintCppAd::getValue(scalar_t time, const vector_t& state, const vector_t& input,
-                                             const PreComputation& preComputation) const {
+vector_t StateInputConstraintCppAd::getValue(scalar_t time, const vector_t& state, const vector_t& input, const PreComputation&) const {
   vector_t tapedTimeStateInput(1 + state.rows() + input.rows());
   tapedTimeStateInput << time, state, input;
-  return adInterfacePtr_->getFunctionValue(tapedTimeStateInput, getParameters(time, preComputation));
+  return adInterfacePtr_->getFunctionValue(tapedTimeStateInput, getParameters(time));
 }
 
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/
 VectorFunctionLinearApproximation StateInputConstraintCppAd::getLinearApproximation(scalar_t time, const vector_t& state,
-                                                                                    const vector_t& input,
-                                                                                    const PreComputation& preComputation) const {
+                                                                                    const vector_t& input, const PreComputation&) const {
   VectorFunctionLinearApproximation constraint;
 
   const size_t stateDim = state.rows();
   const size_t inputDim = input.rows();
-  const vector_t params = getParameters(time, preComputation);
+  const vector_t params = getParameters(time);
   vector_t tapedTimeStateInput(1 + stateDim + inputDim);
   tapedTimeStateInput << time, state, input;
 
@@ -102,7 +131,7 @@ VectorFunctionLinearApproximation StateInputConstraintCppAd::getLinearApproximat
 /******************************************************************************************************/
 VectorFunctionQuadraticApproximation StateInputConstraintCppAd::getQuadraticApproximation(scalar_t time, const vector_t& state,
                                                                                           const vector_t& input,
-                                                                                          const PreComputation& preComputation) const {
+                                                                                          const PreComputation&) const {
   if (getOrder() != ConstraintOrder::Quadratic) {
     throw std::runtime_error("[StateInputConstraintCppAd] Quadratic approximation not supported!");
   }
@@ -111,7 +140,7 @@ VectorFunctionQuadraticApproximation StateInputConstraintCppAd::getQuadraticAppr
 
   const size_t stateDim = state.rows();
   const size_t inputDim = input.rows();
-  const vector_t params = getParameters(time, preComputation);
+  const vector_t params = getParameters(time);
   vector_t tapedTimeStateInput(1 + stateDim + inputDim);
   tapedTimeStateInput << time, state, input;
 

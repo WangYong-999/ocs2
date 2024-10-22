@@ -31,7 +31,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <robot_state_publisher/robot_state_publisher.h>
 #include <tf/transform_broadcaster.h>
-
+#include <ros/ros.h>
 #include <ocs2_ros_interfaces/mrt/DummyObserver.h>
 
 #include <ocs2_ballbot/definitions.h>

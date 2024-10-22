@@ -29,13 +29,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "ocs2_ddp/search_strategy/LevenbergMarquardtStrategy.h"
 
-#include <iomanip>
-
 #include "ocs2_ddp/DDP_HelperFunctions.h"
 #include "ocs2_ddp/HessianCorrection.h"
-
-#include <ocs2_oc/oc_problem/OptimalControlProblemHelperFunction.h>
-#include <ocs2_oc/trajectory_adjustment/TrajectorySpreadingHelperFunctions.h>
 
 namespace ocs2 {
 
@@ -55,7 +50,7 @@ LevenbergMarquardtStrategy::LevenbergMarquardtStrategy(search_strategy::Settings
 /******************************************************************************************************/
 /******************************************************************************************************/
 void LevenbergMarquardtStrategy::reset() {
-  lmModule_ = LevenbergMarquardtModule();
+  levenbergMarquardtModule_ = LevenbergMarquardtModule();
 }
 
 /******************************************************************************************************/
@@ -63,8 +58,7 @@ void LevenbergMarquardtStrategy::reset() {
 /******************************************************************************************************/
 bool LevenbergMarquardtStrategy::run(const std::pair<scalar_t, scalar_t>& timePeriod, const vector_t& initState,
                                      const scalar_t expectedCost, const LinearController& unoptimizedController,
-                                     const DualSolution& dualSolution, const ModeSchedule& modeSchedule,
-                                     search_strategy::SolutionRef solution) {
+                                     const ModeSchedule& modeSchedule, search_strategy::SolutionRef solution) {
   constexpr size_t taskId = 0;
 
   // previous merit and the expected reduction
@@ -80,27 +74,11 @@ bool LevenbergMarquardtStrategy::run(const std::pair<scalar_t, scalar_t>& timePe
     incrementController(stepLength, unoptimizedController, getLinearController(solution.primalSolution));
     solution.avgTimeStep = rolloutTrajectory(rolloutRef_, timePeriod.first, initState, timePeriod.second, solution.primalSolution);
 
-    // adjust dual solution only if it is required
-    const DualSolution* adjustedDualSolutionPtr = &dualSolution;
-    if (!dualSolution.timeTrajectory.empty()) {
-      // trajectory spreading
-      constexpr bool debugPrint = false;
-      TrajectorySpreading trajectorySpreading(debugPrint);
-      const auto status = trajectorySpreading.set(modeSchedule, solution.primalSolution.modeSchedule_, dualSolution.timeTrajectory);
-      if (status.willTruncate || status.willPerformTrajectorySpreading) {
-        trajectorySpread(trajectorySpreading, dualSolution, tempDualSolution_);
-        adjustedDualSolutionPtr = &tempDualSolution_;
-      }
-    }
-
-    // initialize dual solution
-    initializeDualSolution(optimalControlProblemRef_, solution.primalSolution, *adjustedDualSolutionPtr, solution.dualSolution);
-
-    // compute problem metrics
-    computeRolloutMetrics(optimalControlProblemRef_, solution.primalSolution, solution.dualSolution, solution.problemMetrics);
+    // compute metrics
+    computeRolloutMetrics(optimalControlProblemRef_, solution.primalSolution, solution.metrics);
 
     // compute performanceIndex
-    solution.performanceIndex = computeRolloutPerformanceIndex(solution.primalSolution.timeTrajectory_, solution.problemMetrics);
+    solution.performanceIndex = computeRolloutPerformanceIndex(solution.primalSolution.timeTrajectory_, solution.metrics);
     solution.performanceIndex.merit = meritFunc_(solution.performanceIndex);
 
     // display
@@ -121,7 +99,14 @@ bool LevenbergMarquardtStrategy::run(const std::pair<scalar_t, scalar_t>& timePe
 
   // compute pho (the ratio between actual reduction and predicted reduction)
   const auto actualReduction = prevMerit - solution.performanceIndex.merit;
-  const auto pho = reductionToPredictedReduction(actualReduction, expectedReduction);
+
+  if (std::abs(actualReduction) < baseSettings_.minRelCost || expectedReduction <= baseSettings_.minRelCost) {
+    levenbergMarquardtModule_.pho = 1.0;
+  } else if (actualReduction < 0.0) {
+    levenbergMarquardtModule_.pho = 0.0;
+  } else {
+    levenbergMarquardtModule_.pho = actualReduction / expectedReduction;
+  }
 
   // display
   if (baseSettings_.displayInfo) {
@@ -129,63 +114,73 @@ bool LevenbergMarquardtStrategy::run(const std::pair<scalar_t, scalar_t>& timePe
   }
 
   // adjust riccatiMultipleAdaptiveRatio and riccatiMultiple
-  if (pho < 0.25) {
+  if (levenbergMarquardtModule_.pho < 0.25) {
     // increase riccatiMultipleAdaptiveRatio
-    lmModule_.riccatiMultipleAdaptiveRatio = std::max(1.0, lmModule_.riccatiMultipleAdaptiveRatio) * settings_.riccatiMultipleDefaultRatio;
+    levenbergMarquardtModule_.riccatiMultipleAdaptiveRatio =
+        std::max(1.0, levenbergMarquardtModule_.riccatiMultipleAdaptiveRatio) * settings_.riccatiMultipleDefaultRatio_;
 
     // increase riccatiMultiple
-    const auto riccatiMultipleTemp = lmModule_.riccatiMultipleAdaptiveRatio * lmModule_.riccatiMultiple;
-    lmModule_.riccatiMultiple = std::max(riccatiMultipleTemp, settings_.riccatiMultipleDefaultFactor);
+    auto riccatiMultipleTemp = levenbergMarquardtModule_.riccatiMultipleAdaptiveRatio * levenbergMarquardtModule_.riccatiMultiple;
+    if (riccatiMultipleTemp > settings_.riccatiMultipleDefaultFactor_) {
+      levenbergMarquardtModule_.riccatiMultiple = riccatiMultipleTemp;
+    } else {
+      levenbergMarquardtModule_.riccatiMultiple = settings_.riccatiMultipleDefaultFactor_;
+    }
 
-  } else if (pho > 0.75) {
+  } else if (levenbergMarquardtModule_.pho > 0.75) {
     // decrease riccatiMultipleAdaptiveRatio
-    lmModule_.riccatiMultipleAdaptiveRatio = std::min(1.0, lmModule_.riccatiMultipleAdaptiveRatio) / settings_.riccatiMultipleDefaultRatio;
+    levenbergMarquardtModule_.riccatiMultipleAdaptiveRatio =
+        std::min(1.0, levenbergMarquardtModule_.riccatiMultipleAdaptiveRatio) / settings_.riccatiMultipleDefaultRatio_;
 
     // decrease riccatiMultiple
-    const auto riccatiMultipleTemp = lmModule_.riccatiMultipleAdaptiveRatio * lmModule_.riccatiMultiple;
-    lmModule_.riccatiMultiple = (riccatiMultipleTemp > settings_.riccatiMultipleDefaultFactor) ? riccatiMultipleTemp : 0.0;
-
+    auto riccatiMultipleTemp = levenbergMarquardtModule_.riccatiMultipleAdaptiveRatio * levenbergMarquardtModule_.riccatiMultiple;
+    if (riccatiMultipleTemp > settings_.riccatiMultipleDefaultFactor_) {
+      levenbergMarquardtModule_.riccatiMultiple = riccatiMultipleTemp;
+    } else {
+      levenbergMarquardtModule_.riccatiMultiple = 0.0;
+    }
   } else {
-    lmModule_.riccatiMultipleAdaptiveRatio = 1.0;
-    // lmModule_.riccatiMultiple will not change.
+    levenbergMarquardtModule_.riccatiMultipleAdaptiveRatio = 1.0;
+    // levenbergMarquardtModule_.riccatiMultiple will not change.
   }
 
   // display
   if (baseSettings_.displayInfo) {
     std::stringstream displayInfo;
-    if (lmModule_.numSuccessiveRejections == 0) {
-      displayInfo << "The step is accepted with pho: " << pho << ". ";
+    if (levenbergMarquardtModule_.numSuccessiveRejections == 0) {
+      displayInfo << "The step is accepted with pho: " << levenbergMarquardtModule_.pho << ". ";
     } else {
-      displayInfo << "The step is rejected with pho: " << pho << " (" << lmModule_.numSuccessiveRejections << " out of "
-                  << settings_.maxNumSuccessiveRejections << "). ";
+      displayInfo << "The step is rejected with pho: " << levenbergMarquardtModule_.pho << " ("
+                  << levenbergMarquardtModule_.numSuccessiveRejections << " out of " << settings_.maxNumSuccessiveRejections_ << "). ";
     }
 
-    if (numerics::almost_eq(lmModule_.riccatiMultipleAdaptiveRatio, 1.0)) {
+    if (numerics::almost_eq(levenbergMarquardtModule_.riccatiMultipleAdaptiveRatio, 1.0)) {
       displayInfo << "The Riccati multiple is kept constant: ";
-    } else if (lmModule_.riccatiMultipleAdaptiveRatio < 1.0) {
+    } else if (levenbergMarquardtModule_.riccatiMultipleAdaptiveRatio < 1.0) {
       displayInfo << "The Riccati multiple is decreased to: ";
     } else {
       displayInfo << "The Riccati multiple is increased to: ";
     }
-    displayInfo << lmModule_.riccatiMultiple << ", with ratio: " << lmModule_.riccatiMultipleAdaptiveRatio << ".\n";
+    displayInfo << levenbergMarquardtModule_.riccatiMultiple << ", with ratio: " << levenbergMarquardtModule_.riccatiMultipleAdaptiveRatio
+                << ".\n";
 
     std::cerr << displayInfo.str();
   }
 
   // max accepted number of successive rejections
-  if (lmModule_.numSuccessiveRejections > settings_.maxNumSuccessiveRejections) {
+  if (levenbergMarquardtModule_.numSuccessiveRejections > settings_.maxNumSuccessiveRejections_) {
     throw std::runtime_error("The maximum number of successive solution rejections has been reached!");
   }
 
   // accept or reject the step and modify numSuccessiveRejections
-  if (pho >= settings_.minAcceptedPho) {
+  if (levenbergMarquardtModule_.pho >= settings_.minAcceptedPho_) {
     // accept the solution
-    lmModule_.numSuccessiveRejections = 0;
+    levenbergMarquardtModule_.numSuccessiveRejections = 0;
     return true;
 
   } else {
     // reject the solution
-    ++lmModule_.numSuccessiveRejections;
+    ++levenbergMarquardtModule_.numSuccessiveRejections;
     return false;
   }
 }
@@ -203,7 +198,7 @@ std::pair<bool, std::string> LevenbergMarquardtStrategy::checkConvergence(bool u
   const scalar_t previousTotalCost =
       previousPerformanceIndex.cost + previousPerformanceIndex.equalityLagrangian + previousPerformanceIndex.inequalityLagrangian;
   const scalar_t relCost = std::abs(currentTotalCost - previousTotalCost);
-  if (lmModule_.numSuccessiveRejections == 0 && !unreliableControllerIncrement) {
+  if (levenbergMarquardtModule_.numSuccessiveRejections == 0 && !unreliableControllerIncrement) {
     isCostFunctionConverged = relCost <= baseSettings_.minRelCost;
   }
   const bool isConstraintsSatisfied = currentPerformanceIndex.equalityConstraintsSSE <= baseSettings_.constraintTolerance;
@@ -235,8 +230,8 @@ void LevenbergMarquardtStrategy::computeRiccatiModification(const ModelData& pro
 
   // deltaQm, deltaRm, deltaPm
   deltaQm.setZero(projectedModelData.stateDim, projectedModelData.stateDim);
-  deltaGv.noalias() = lmModule_.riccatiMultiple * BmProjected.transpose() * HvProjected;
-  deltaGm.noalias() = lmModule_.riccatiMultiple * BmProjected.transpose() * AmProjected;
+  deltaGv.noalias() = levenbergMarquardtModule_.riccatiMultiple * BmProjected.transpose() * HvProjected;
+  deltaGm.noalias() = levenbergMarquardtModule_.riccatiMultiple * BmProjected.transpose() * AmProjected;
 }
 
 /******************************************************************************************************/
@@ -244,7 +239,7 @@ void LevenbergMarquardtStrategy::computeRiccatiModification(const ModelData& pro
 /******************************************************************************************************/
 matrix_t LevenbergMarquardtStrategy::augmentHamiltonianHessian(const ModelData& modelData, const matrix_t& Hm) const {
   matrix_t HmAug = Hm;
-  HmAug.noalias() += lmModule_.riccatiMultiple * modelData.dynamics.dfdu.transpose() * modelData.dynamics.dfdu;
+  HmAug.noalias() += levenbergMarquardtModule_.riccatiMultiple * modelData.dynamics.dfdu.transpose() * modelData.dynamics.dfdu;
   return HmAug;
 }
 

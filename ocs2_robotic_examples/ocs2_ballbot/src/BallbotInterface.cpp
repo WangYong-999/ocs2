@@ -67,8 +67,7 @@ BallbotInterface::BallbotInterface(const std::string& taskFile, const std::strin
   // DDP SQP MPC settings
   ddpSettings_ = ddp::loadSettings(taskFile, "ddp");
   mpcSettings_ = mpc::loadSettings(taskFile, "mpc");
-  sqpSettings_ = sqp::loadSettings(taskFile, "sqp");
-  slpSettings_ = slp::loadSettings(taskFile, "slp");
+  sqpSettings_ = multiple_shooting::loadSettings(taskFile, "multiple_shooting");
 
   /*
    * ReferenceManager & SolverSynchronizedModule
@@ -89,8 +88,8 @@ BallbotInterface::BallbotInterface(const std::string& taskFile, const std::strin
   std::cerr << "R:  \n" << R << "\n";
   std::cerr << "Q_final:\n" << Qf << "\n";
 
-  problem_.costPtr->add("cost", std::make_unique<QuadraticStateInputCost>(Q, R));
-  problem_.finalCostPtr->add("finalCost", std::make_unique<QuadraticStateCost>(Qf));
+  problem_.costPtr->add("cost", std::unique_ptr<StateInputCost>(new QuadraticStateInputCost(Q, R)));
+  problem_.finalCostPtr->add("finalCost", std::unique_ptr<StateCost>(new QuadraticStateCost(Qf)));
 
   // Dynamics
   bool recompileLibraries;  // load the flag to generate library files from taskFile

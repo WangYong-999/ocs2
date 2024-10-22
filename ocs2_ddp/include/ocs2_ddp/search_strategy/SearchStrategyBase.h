@@ -35,13 +35,12 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <ocs2_core/Types.h>
 #include <ocs2_core/control/LinearController.h>
-#include <ocs2_core/model_data/Metrics.h>
 #include <ocs2_core/model_data/ModelData.h>
 #include <ocs2_core/reference/ModeSchedule.h>
-#include <ocs2_oc/oc_data/DualSolution.h>
-#include <ocs2_oc/oc_data/PerformanceIndex.h>
+
+#include <ocs2_oc/oc_data/Metrics.h>
 #include <ocs2_oc/oc_data/PrimalSolution.h>
-#include <ocs2_oc/oc_data/ProblemMetrics.h>
+#include <ocs2_oc/oc_solver/PerformanceIndex.h>
 
 #include "ocs2_ddp/search_strategy/StrategySettings.h"
 
@@ -80,14 +79,12 @@ class SearchStrategyBase {
    * @param [in] initState: Initial state
    * @param [in] expectedCost: The expected cost based on the LQ model optimization.
    * @param [in] unoptimizedController: The unoptimized controller which search will be performed.
-   * @param [in] dualSolution: The dual solution.
    * @param [in] ModeSchedule The current mode schedule.
-   * @param [in/out]
-   * @param [out] solution: Output of search (primalSolution, performanceIndex, problemMetrics, avgTimeStep)
+   * @param [out] solution: Output of search (primalSolution, performanceIndex, metrics, avgTimeStep)
    * @return whether the search was successful or failed.
    */
   virtual bool run(const std::pair<scalar_t, scalar_t>& timePeriod, const vector_t& initState, const scalar_t expectedCost,
-                   const LinearController& unoptimizedController, const DualSolution& dualSolution, const ModeSchedule& modeSchedule,
+                   const LinearController& unoptimizedController, const ModeSchedule& modeSchedule,
                    search_strategy::SolutionRef solution) = 0;
 
   /**
@@ -136,42 +133,30 @@ namespace ocs2 {
 namespace search_strategy {
 
 struct Solution {
-  scalar_t avgTimeStep;
-  DualSolution dualSolution;
   PrimalSolution primalSolution;
-  ProblemMetrics problemMetrics;
   PerformanceIndex performanceIndex;
+  MetricsCollection metrics;
+  scalar_t avgTimeStep;
 };
 
 struct SolutionRef {
   SolutionRef(Solution& s)
-      : avgTimeStep(s.avgTimeStep),
-        dualSolution(s.dualSolution),
-        primalSolution(s.primalSolution),
-        problemMetrics(s.problemMetrics),
-        performanceIndex(s.performanceIndex) {}
+      : primalSolution(s.primalSolution), performanceIndex(s.performanceIndex), metrics(s.metrics), avgTimeStep(s.avgTimeStep) {}
+  SolutionRef(PrimalSolution& primalSolutionArg, PerformanceIndex& performanceIndexArg, MetricsCollection& metricsArg,
+              scalar_t& avgTimeStepArg)
+      : primalSolution(primalSolutionArg), performanceIndex(performanceIndexArg), metrics(metricsArg), avgTimeStep(avgTimeStepArg) {}
 
-  SolutionRef(scalar_t& avgTimeStepArg, DualSolution& dualSolutionArg, PrimalSolution& primalSolutionArg, ProblemMetrics& problemMetricsArg,
-              PerformanceIndex& performanceIndexArg)
-      : avgTimeStep(avgTimeStepArg),
-        dualSolution(dualSolutionArg),
-        primalSolution(primalSolutionArg),
-        problemMetrics(problemMetricsArg),
-        performanceIndex(performanceIndexArg) {}
-
-  scalar_t& avgTimeStep;
-  DualSolution& dualSolution;
   PrimalSolution& primalSolution;
-  ProblemMetrics& problemMetrics;
   PerformanceIndex& performanceIndex;
+  MetricsCollection& metrics;
+  scalar_t& avgTimeStep;
 };
 
 inline void swap(SolutionRef lhs, SolutionRef rhs) {
-  std::swap(lhs.avgTimeStep, rhs.avgTimeStep);
-  lhs.dualSolution.swap(rhs.dualSolution);
   lhs.primalSolution.swap(rhs.primalSolution);
-  lhs.problemMetrics.swap(rhs.problemMetrics);
-  ocs2::swap(lhs.performanceIndex, rhs.performanceIndex);
+  swap(lhs.performanceIndex, rhs.performanceIndex);
+  swap(lhs.metrics, rhs.metrics);
+  std::swap(lhs.avgTimeStep, rhs.avgTimeStep);
 }
 
 }  // namespace search_strategy

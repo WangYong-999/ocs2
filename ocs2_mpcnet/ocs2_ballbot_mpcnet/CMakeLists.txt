@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(ocs2_ballbot_mpcnet)
 
+add_compile_options(-std=c++14)
+
 set(CATKIN_PACKAGE_DEPENDENCIES
   ocs2_ballbot
   ocs2_ballbot_ros
@@ -31,6 +33,8 @@ catkin_package(
 ###########
 ## Build ##
 ###########
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(
   include

@@ -29,13 +29,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "ocs2_ddp/search_strategy/LineSearchStrategy.h"
 
-#include <iomanip>
-
 #include "ocs2_ddp/DDP_HelperFunctions.h"
 #include "ocs2_ddp/HessianCorrection.h"
-
-#include <ocs2_oc/oc_problem/OptimalControlProblemHelperFunction.h>
-#include <ocs2_oc/trajectory_adjustment/TrajectorySpreadingHelperFunctions.h>
 
 namespace ocs2 {
 
@@ -49,13 +44,12 @@ LineSearchStrategy::LineSearchStrategy(search_strategy::Settings baseSettings, l
     : SearchStrategyBase(std::move(baseSettings)),
       settings_(std::move(settings)),
       threadPoolRef_(threadPoolRef),
-      tempDualSolutions_(threadPoolRef.numThreads() + 1),
       workersSolution_(threadPoolRef.numThreads() + 1),
       rolloutRefStock_(std::move(rolloutRefStock)),
       optimalControlProblemRefStock_(std::move(optimalControlProblemRefStock)),
       meritFunc_(std::move(meritFunc)) {
   // infeasible learning rate adjustment scheme
-  if (!numerics::almost_ge(settings_.maxStepLength, settings_.minStepLength)) {
+  if (!numerics::almost_ge(settings_.maxStepLength_, settings_.minStepLength_)) {
     throw std::runtime_error("The maximum learning rate is smaller than the minimum learning rate.");
   }
 
@@ -70,14 +64,14 @@ LineSearchStrategy::LineSearchStrategy(search_strategy::Settings baseSettings, l
 /******************************************************************************************************/
 size_t LineSearchStrategy::maxNumOfSearches() const {
   size_t maxNumOfLineSearches = 0;
-  if (numerics::almost_eq(settings_.minStepLength, settings_.maxStepLength)) {
+  if (numerics::almost_eq(settings_.minStepLength_, settings_.maxStepLength_)) {
     maxNumOfLineSearches = 1;
-  } else if (settings_.maxStepLength < settings_.minStepLength) {
+  } else if (settings_.maxStepLength_ < settings_.minStepLength_) {
     maxNumOfLineSearches = 0;
   } else {
-    const auto ratio = settings_.minStepLength / settings_.maxStepLength;
+    const auto ratio = settings_.minStepLength_ / settings_.maxStepLength_;
     maxNumOfLineSearches =
-        static_cast<size_t>(std::log(ratio + numeric_traits::limitEpsilon<scalar_t>()) / std::log(settings_.contractionRate) + 1);
+        static_cast<size_t>(std::log(ratio + numeric_traits::limitEpsilon<scalar_t>()) / std::log(settings_.contractionRate_) + 1);
   }
   return maxNumOfLineSearches;
 }
@@ -95,28 +89,11 @@ void LineSearchStrategy::computeSolution(size_t taskId, scalar_t stepLength, sea
   solution.avgTimeStep = rolloutTrajectory(rollout, lineSearchInputRef_.timePeriodPtr->first, *lineSearchInputRef_.initStatePtr,
                                            lineSearchInputRef_.timePeriodPtr->second, solution.primalSolution);
 
-  // adjust dual solution only if it is required
-  const DualSolution* adjustedDualSolutionPtr = lineSearchInputRef_.dualSolutionPtr;
-  if (!lineSearchInputRef_.dualSolutionPtr->timeTrajectory.empty()) {
-    // trajectory spreading
-    constexpr bool debugPrint = false;
-    TrajectorySpreading trajectorySpreading(debugPrint);
-    const auto status = trajectorySpreading.set(*lineSearchInputRef_.modeSchedulePtr, solution.primalSolution.modeSchedule_,
-                                                lineSearchInputRef_.dualSolutionPtr->timeTrajectory);
-    if (status.willTruncate || status.willPerformTrajectorySpreading) {
-      trajectorySpread(trajectorySpreading, *lineSearchInputRef_.dualSolutionPtr, tempDualSolutions_[taskId]);
-      adjustedDualSolutionPtr = &tempDualSolutions_[taskId];
-    }
-  }
-
-  // initialize dual solution
-  initializeDualSolution(problem, solution.primalSolution, *adjustedDualSolutionPtr, solution.dualSolution);
-
-  // compute problem metrics
-  computeRolloutMetrics(problem, solution.primalSolution, solution.dualSolution, solution.problemMetrics);
+  // compute metrics
+  computeRolloutMetrics(problem, solution.primalSolution, solution.metrics);
 
   // compute performanceIndex
-  solution.performanceIndex = computeRolloutPerformanceIndex(solution.primalSolution.timeTrajectory_, solution.problemMetrics);
+  solution.performanceIndex = computeRolloutPerformanceIndex(solution.primalSolution.timeTrajectory_, solution.metrics);
   solution.performanceIndex.merit = meritFunc_(solution.performanceIndex);
 
   // display
@@ -132,13 +109,12 @@ void LineSearchStrategy::computeSolution(size_t taskId, scalar_t stepLength, sea
 /******************************************************************************************************/
 /******************************************************************************************************/
 bool LineSearchStrategy::run(const std::pair<scalar_t, scalar_t>& timePeriod, const vector_t& initState, const scalar_t expectedCost,
-                             const LinearController& unoptimizedController, const DualSolution& dualSolution,
-                             const ModeSchedule& modeSchedule, search_strategy::SolutionRef solutionRef) {
+                             const LinearController& unoptimizedController, const ModeSchedule& modeSchedule,
+                             search_strategy::SolutionRef solutionRef) {
   // initialize lineSearchModule inputs
   lineSearchInputRef_.timePeriodPtr = &timePeriod;
   lineSearchInputRef_.initStatePtr = &initState;
   lineSearchInputRef_.unoptimizedControllerPtr = &unoptimizedController;
-  lineSearchInputRef_.dualSolutionPtr = &dualSolution;
   lineSearchInputRef_.modeSchedulePtr = &modeSchedule;
   bestSolutionRef_ = &solutionRef;
 
@@ -188,14 +164,14 @@ bool LineSearchStrategy::run(const std::pair<scalar_t, scalar_t>& timePeriod, co
 void LineSearchStrategy::lineSearchTask(const size_t taskId) {
   while (true) {
     const size_t alphaExp = alphaExpNext_++;
-    const scalar_t stepLength = settings_.maxStepLength * std::pow(settings_.contractionRate, alphaExp);
+    const scalar_t stepLength = settings_.maxStepLength_ * std::pow(settings_.contractionRate_, alphaExp);
 
     /*
      * finish this thread's task since the learning rate is less than the minimum learning rate.
      * This means that the all the line search tasks are already processed or they are under
      * process in other threads.
      */
-    if (!numerics::almost_ge(stepLength, settings_.minStepLength)) {
+    if (!numerics::almost_ge(stepLength, settings_.minStepLength_)) {
       break;
     }
 
@@ -232,15 +208,27 @@ void LineSearchStrategy::lineSearchTask(const size_t taskId) {
        * cost should be better than the baseline cost but learning rate should
        * be as high as possible. This is equivalent to a single core line search.
        */
+      const bool progressCondition = workersSolution_[taskId].performanceIndex.merit < (baselineMerit_ * (1.0 - 1e-3 * stepLength));
       const bool armijoCondition = workersSolution_[taskId].performanceIndex.merit <
-                                   (baselineMerit_ - settings_.armijoCoefficient * stepLength * unoptimizedControllerUpdateIS_);
-      if (armijoCondition && stepLength > bestStepSize_) {  // save solution
+                                   (baselineMerit_ - settings_.armijoCoefficient_ * stepLength * unoptimizedControllerUpdateIS_);
+
+      if (armijoCondition && stepLength > bestStepSize_) {
         bestStepSize_ = stepLength;
         swap(*bestSolutionRef_, workersSolution_[taskId]);
-        terminateLinesearchTasks = std::all_of(alphaProcessed_.cbegin(), alphaProcessed_.cbegin() + alphaExp, [](bool f) { return f; });
-      }
+
+        // whether to stop all other thread.
+        terminateLinesearchTasks = true;
+        for (size_t i = 0; i < alphaExp; i++) {
+          if (!alphaProcessed_[i]) {
+            terminateLinesearchTasks = false;
+            break;
+          }
+        }  // end of i loop
+
+      }  // end of if
 
       alphaProcessed_[alphaExp] = true;
+
     }  // end lock
 
     // kill other ongoing line search tasks
@@ -302,7 +290,7 @@ void LineSearchStrategy::computeRiccatiModification(const ModelData& projectedMo
 
   // deltaQm
   deltaQm = Q_minus_PTRinvP;
-  hessian_correction::shiftHessian(settings_.hessianCorrectionStrategy, deltaQm, settings_.hessianCorrectionMultiple);
+  hessian_correction::shiftHessian(settings_.hessianCorrectionStrategy_, deltaQm, settings_.hessianCorrectionMultiple_);
   deltaQm -= Q_minus_PTRinvP;
 
   // deltaGv, deltaGm

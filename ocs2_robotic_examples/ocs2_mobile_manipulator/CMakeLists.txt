@@ -24,7 +24,9 @@ find_package(Boost REQUIRED COMPONENTS
 )
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(pinocchio REQUIRED pinocchio)
+#pkg_check_modules(pinocchio REQUIRED pinocchio)
+find_package(pinocchio REQUIRED)
+find_package(hpp-fcl REQUIRED)
 
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
@@ -70,6 +72,8 @@ include_directories(
   ${EIGEN3_INCLUDE_DIRS}
   ${Boost_INCLUDE_DIRS}
   ${catkin_INCLUDE_DIRS}
+  ${pinocchio_INCLUDE_DIRS}
+  ${hpp-fcl_INCLUDE_DIRS}
 )
 
 link_directories(
@@ -82,6 +86,8 @@ add_library(${PROJECT_NAME}
   src/MobileManipulatorPreComputation.cpp
   src/MobileManipulatorPinocchioMapping.cpp
   src/constraint/EndEffectorConstraint.cpp
+  src/constraint/JointPositionLimits.cpp
+  src/constraint/JointVelocityLimits.cpp
   src/dynamics/WheelBasedMobileManipulatorDynamics.cpp
   src/dynamics/DefaultManipulatorDynamics.cpp
   src/dynamics/FloatingArmManipulatorDynamics.cpp

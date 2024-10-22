@@ -36,18 +36,6 @@ namespace qp_solver {
 
 std::vector<LinearQuadraticStage> getLinearQuadraticApproximation(OptimalControlProblem& optimalControProblem,
                                                                   const ContinuousTrajectory& nominalTrajectory) {
-  // OCP check
-  if (!optimalControProblem.equalityLagrangianPtr->empty() || !optimalControProblem.stateEqualityLagrangianPtr->empty()) {
-    throw std::runtime_error("[getLinearQuadraticApproximation] equalityLagrangianPtr and stateEqualityLagrangianPtr should be empty!");
-  }
-  if (!optimalControProblem.inequalityLagrangianPtr->empty() || !optimalControProblem.stateInequalityLagrangianPtr->empty()) {
-    throw std::runtime_error("[getLinearQuadraticApproximation] inequalityLagrangianPtr and stateInequalityLagrangianPtr should be empty!");
-  }
-  if (!optimalControProblem.finalEqualityLagrangianPtr->empty() || !optimalControProblem.finalInequalityLagrangianPtr->empty()) {
-    throw std::runtime_error(
-        "[getLinearQuadraticApproximation] finalEqualityLagrangianPtr and finalInequalityLagrangianPtr should be empty!");
-  }
-
   if (nominalTrajectory.timeTrajectory.empty()) {
     return {};
   }
@@ -64,7 +52,7 @@ std::vector<LinearQuadraticStage> getLinearQuadraticApproximation(OptimalControl
     lqp.emplace_back(approximateStage(optimalControProblem, {t[k], x[k], u[k]}, {t[k + 1], x[k + 1]}, k == 0));
   }
 
-  auto modelData = approximateFinalLQ(optimalControProblem, t[N], x[N], MultiplierCollection());
+  auto modelData = approximateFinalLQ(optimalControProblem, t[N], x[N]);
 
   // checking the numerical properties
   const auto errSize = checkSize(modelData, x[N].rows(), 0);
@@ -85,7 +73,7 @@ std::vector<LinearQuadraticStage> getLinearQuadraticApproximation(OptimalControl
 
 LinearQuadraticStage approximateStage(OptimalControlProblem& optimalControProblem, TrajectoryRef start, StateTrajectoryRef end,
                                       bool isInitialTime) {
-  const auto modelData = approximateIntermediateLQ(optimalControProblem, start.t, start.x, start.u, MultiplierCollection());
+  const auto modelData = approximateIntermediateLQ(optimalControProblem, start.t, start.x, start.u);
 
   // checking the numerical properties
   const auto errSize = checkSize(modelData, start.x.rows(), start.u.rows());

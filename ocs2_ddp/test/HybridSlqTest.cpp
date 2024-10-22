@@ -34,10 +34,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <ocs2_oc/rollout/StateTriggeredRollout.h>
 #include <ocs2_oc/synchronized_module/ReferenceManager.h>
-#include <ocs2_oc/synchronized_module/SolverObserver.h>
 #include <ocs2_oc/test/dynamics_hybrid_slq_test.h>
 
-#include <ocs2_core/augmented_lagrangian/AugmentedLagrangian.h>
 #include <ocs2_core/cost/QuadraticStateCost.h>
 #include <ocs2_core/cost/QuadraticStateInputCost.h>
 #include <ocs2_core/initialization/OperatingPoints.h>
@@ -70,101 +68,117 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 TEST(HybridSlqTest, state_rollout_slq) {
   using namespace ocs2;
 
-  constexpr scalar_t minRelCost = 1e-6;  // to avoid early termination
+  const size_t stateDim = STATE_DIM;
+  const size_t inputDim = INPUT_DIM;
 
-  const ddp::Settings ddpSettings = [&]() {
-    ddp::Settings settings;
+  ddp::Settings ddpSettings;
+  ddpSettings.algorithm_ = ddp::Algorithm::SLQ;
+  ddpSettings.displayInfo_ = true;
+  ddpSettings.displayShortSummary_ = true;
+  ddpSettings.maxNumIterations_ = 30;
+  ddpSettings.nThreads_ = 1;
+  ddpSettings.checkNumericalStability_ = false;
+  ddpSettings.absTolODE_ = 1e-10;
+  ddpSettings.relTolODE_ = 1e-7;
+  ddpSettings.maxNumStepsPerSecond_ = 10000;
+  ddpSettings.useFeedbackPolicy_ = true;
+  ddpSettings.debugPrintRollout_ = false;
+  ddpSettings.strategy_ = search_strategy::Type::LINE_SEARCH;
+  ddpSettings.lineSearch_.minStepLength_ = 0.001;
 
-    settings.algorithm_ = ddp::Algorithm::SLQ;
-    settings.displayInfo_ = true;
-    settings.displayShortSummary_ = true;
-    settings.maxNumIterations_ = 100;
-    settings.nThreads_ = 1;
-    settings.minRelCost_ = minRelCost;
-    settings.checkNumericalStability_ = false;
-    settings.absTolODE_ = 1e-10;
-    settings.relTolODE_ = 1e-7;
-    settings.maxNumStepsPerSecond_ = 10000;
-    settings.useFeedbackPolicy_ = true;
-    settings.debugPrintRollout_ = false;
-    settings.strategy_ = search_strategy::Type::LINE_SEARCH;
-    settings.lineSearch_.minStepLength = 1e-3;
+  rollout::Settings rolloutSettings;
+  rolloutSettings.absTolODE = 1e-10;
+  rolloutSettings.relTolODE = 1e-7;
+  rolloutSettings.timeStep = 1e-3;
+  rolloutSettings.maxNumStepsPerSecond = 10000;
 
-    return settings;
-  }();
+  scalar_t startTime = 0.0;
+  scalar_t finalTime = 5.0;
 
-  const rollout::Settings rolloutSettings = [&]() {
-    rollout::Settings settings;
-    settings.absTolODE = 1e-10;
-    settings.relTolODE = 1e-7;
-    settings.timeStep = 1e-3;
-    settings.maxNumStepsPerSecond = 10000;
-    return settings;
-  }();
-
-  const scalar_t startTime = 0.0;
-  const scalar_t finalTime = 5.0;
-  const vector_t initState = (vector_t(STATE_DIM) << 0.0, 1.0, 1.0).finished();
+  vector_t initState(stateDim);
+  initState << 0, 1, 1;
 
   // rollout
   HybridSysDynamics systemDynamics;
   StateTriggeredRollout stateTriggeredRollout(systemDynamics, rolloutSettings);
 
-  // cost function
-  const matrix_t Q = (matrix_t(STATE_DIM, STATE_DIM) << 50, 0, 0, 0, 50, 0, 0, 0, 0).finished();
-  const matrix_t R = (matrix_t(INPUT_DIM, INPUT_DIM) << 1).finished();
   // constraints
-  auto boundsConstraints = std::make_unique<HybridSysBounds>();
+  std::unique_ptr<StateInputConstraint> systemConstraints(new HybridSysBounds);
+  std::unique_ptr<PenaltyBase> penalty(new RelaxedBarrierPenalty({0.2, 1e-4}));
+  std::unique_ptr<StateInputCost> softSystemLagrangian(new StateInputSoftConstraint(std::move(systemConstraints), std::move(penalty)));
 
-  OptimalControlProblem problem;
+  // cost function
+  matrix_t Q(stateDim, stateDim);
+  Q << 50, 0, 0, 0, 50, 0, 0, 0, 0;
+  matrix_t R(inputDim, inputDim);
+  R << 1;
+  std::unique_ptr<ocs2::StateInputCost> cost(new QuadraticStateInputCost(Q, R));
+  matrix_t Qf(stateDim, stateDim);
+  Qf << 50, 0, 0, 0, 50, 0, 0, 0, 0;
+  std::unique_ptr<ocs2::StateCost> preJumpCost(new QuadraticStateCost(Qf));
+  std::unique_ptr<ocs2::StateCost> finalCost(new QuadraticStateCost(Qf));
+
+  ocs2::OptimalControlProblem problem;
   problem.dynamicsPtr.reset(systemDynamics.clone());
-  problem.costPtr->add("cost", std::make_unique<QuadraticStateInputCost>(Q, R));
-  problem.preJumpCostPtr->add("preJumpCost", std::make_unique<QuadraticStateCost>(Q));
-  problem.finalCostPtr->add("finalCost", std::make_unique<QuadraticStateCost>(Q));
-  problem.inequalityLagrangianPtr->add("bounds",
-                                       create(std::move(boundsConstraints), augmented::SlacknessSquaredHingePenalty::create({200.0, 0.1})));
+  problem.costPtr->add("cost", std::move(cost));
+  problem.preJumpCostPtr->add("preJumpCost", std::move(preJumpCost));
+  problem.finalCostPtr->add("finalCost", std::move(finalCost));
+  problem.softConstraintPtr->add("bounds", std::move(softSystemLagrangian));
 
-  const vector_t xNominal = vector_t::Zero(STATE_DIM);
-  const vector_t uNominal = vector_t::Zero(INPUT_DIM);
+  vector_t xNominal = vector_t::Zero(stateDim);
+  vector_t uNominal = vector_t::Zero(inputDim);
   TargetTrajectories targetTrajectories({startTime}, {xNominal}, {uNominal});
   auto referenceManager = std::make_shared<ReferenceManager>(std::move(targetTrajectories));
 
   // operatingTrajectories
-  const vector_t stateOperatingPoint = vector_t::Zero(STATE_DIM);
-  const vector_t inputOperatingPoint = vector_t::Zero(INPUT_DIM);
+  vector_t stateOperatingPoint = vector_t::Zero(stateDim);
+  vector_t inputOperatingPoint = vector_t::Zero(inputDim);
   OperatingPoints operatingTrajectories(stateOperatingPoint, inputOperatingPoint);
 
-  // Test 1: Check constraint compliance. It uses a solver observer to get metrics for the bounds constraints
-  auto boundsConstraintsObserverPtr = SolverObserver::LagrangianTermObserver(
-      SolverObserver::Type::Intermediate, "bounds",
-      [&](const scalar_array_t& timeTraj, const std::vector<LagrangianMetricsConstRef>& metricsTraj) {
-        constexpr scalar_t constraintViolationTolerance = 1e-1;
-        for (size_t i = 0; i < metricsTraj.size(); i++) {
-          const vector_t constraintViolation = metricsTraj[i].constraint.cwiseMin(0.0);
-          EXPECT_NEAR(constraintViolation(0), 0.0, constraintViolationTolerance) << "At time " << timeTraj[i] << "\n";
-          EXPECT_NEAR(constraintViolation(1), 0.0, constraintViolationTolerance) << "At time " << timeTraj[i] << "\n";
-          EXPECT_NEAR(constraintViolation(2), 0.0, constraintViolationTolerance) << "At time " << timeTraj[i] << "\n";
-          EXPECT_NEAR(constraintViolation(3), 0.0, constraintViolationTolerance) << "At time " << timeTraj[i] << "\n";
-        }
-      });
+  std::cout << "Starting SLQ Procedure" << std::endl;
 
-  // setup SLQ
+  // SLQ
   SLQ slq(ddpSettings, stateTriggeredRollout, problem, operatingTrajectories);
   slq.setReferenceManager(referenceManager);
-  slq.addSolverObserver(std::move(boundsConstraintsObserverPtr));
-
-  // run SLQ
   slq.run(startTime, initState, finalTime);
-  const auto solution = slq.primalSolution(finalTime);
+  auto solution = slq.primalSolution(finalTime);
+  std::cout << "SLQ Procedure Done" << std::endl;
 
-  // Test 2: No penetration of guard surfaces
-  for (int i = 0; i < solution.timeTrajectory_.size(); i++) {
-    const vector_t guardSurfaces = systemDynamics.computeGuardSurfaces(solution.timeTrajectory_[i], solution.stateTrajectory_[i]);
-    EXPECT_GT(guardSurfaces(0), -1e-10) << solution.timeTrajectory_[i] << ": " << guardSurfaces(0) << ", " << guardSurfaces(1) << "\n";
-    EXPECT_GT(guardSurfaces(1), -1e-10) << solution.timeTrajectory_[i] << ": " << guardSurfaces(0) << ", " << guardSurfaces(1) << "\n";
+  if (false) {
+    for (int i = 0; i < solution.stateTrajectory_.size(); i++) {
+      std::cout << i << ";" << solution.timeTrajectory_[i] << ";" << solution.stateTrajectory_[i][0] << ";"
+                << solution.stateTrajectory_[i][1] << ";" << solution.stateTrajectory_[i][2] << ";" << solution.inputTrajectory_[i]
+                << std::endl;
+    }
   }
 
-  // Test 3: Check of cost
-  const auto performanceIndecesST = slq.getPerformanceIndeces();
-  EXPECT_LT(performanceIndecesST.cost - 20.1, 10.0 * minRelCost);
+  for (int i = 0; i < solution.stateTrajectory_.size(); i++) {
+    // Test 1 : Constraint Compliance
+    scalar_t constraint0 = -solution.inputTrajectory_[i][0] + 2;
+    scalar_t constraint1 = solution.inputTrajectory_[i][0] + 2;
+    scalar_t constraint2 = solution.stateTrajectory_[i][0] + 2;
+    scalar_t constraint3 = -solution.stateTrajectory_[i][0] + 2;
+
+    EXPECT_GT(constraint0, 0);
+    EXPECT_GT(constraint1, 0);
+    EXPECT_GT(constraint2, 0);
+    EXPECT_GT(constraint3, 0);
+
+    // Test 2 : No penetration of guardSurfaces
+    vector_t guardSurfaces = systemDynamics.computeGuardSurfaces(solution.timeTrajectory_[i], solution.stateTrajectory_[i]);
+
+    EXPECT_GT(guardSurfaces[0], -1e-10);
+    if (!(guardSurfaces[0] > -1e-10)) {
+      std::cout << solution.timeTrajectory_[i] << "," << guardSurfaces[0] << "," << guardSurfaces[1] << std::endl;
+    }
+
+    EXPECT_GT(guardSurfaces[1], -1e-10);
+    if (!(guardSurfaces[1] > -1e-10)) {
+      std::cout << solution.timeTrajectory_[i] << "," << guardSurfaces[0] << "," << guardSurfaces[1] << std::endl;
+    }
+  }
+
+  // Test 3: Check of cost function
+  auto performanceIndecesST = slq.getPerformanceIndeces();
+  EXPECT_LT(performanceIndecesST.cost - 13.0, 10.0 * ddpSettings.minRelCost_);
 }

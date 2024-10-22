@@ -117,19 +117,19 @@ void MPC_MRT_Interface::advanceMpc() {
 /******************************************************************************************************/
 void MPC_MRT_Interface::copyToBuffer(const SystemObservation& mpcInitObservation) {
   // policy
-  auto primalSolutionPtr = std::make_unique<PrimalSolution>();
+  std::unique_ptr<PrimalSolution> primalSolutionPtr(new PrimalSolution);
   const scalar_t startTime = mpcInitObservation.time;
   const scalar_t finalTime =
       (mpc_.settings().solutionTimeWindow_ < 0) ? mpc_.getSolverPtr()->getFinalTime() : startTime + mpc_.settings().solutionTimeWindow_;
   mpc_.getSolverPtr()->getPrimalSolution(finalTime, primalSolutionPtr.get());
 
   // command
-  auto commandPtr = std::make_unique<CommandData>();
+  std::unique_ptr<CommandData> commandPtr(new CommandData);
   commandPtr->mpcInitObservation_ = mpcInitObservation;
   commandPtr->mpcTargetTrajectories_ = mpc_.getSolverPtr()->getReferenceManager().getTargetTrajectories();
 
   // performance indices
-  auto performanceIndicesPtr = std::make_unique<PerformanceIndex>();
+  std::unique_ptr<PerformanceIndex> performanceIndicesPtr(new PerformanceIndex);
   *performanceIndicesPtr = mpc_.getSolverPtr()->getPerformanceIndeces();
 
   this->moveToBuffer(std::move(commandPtr), std::move(primalSolutionPtr), std::move(performanceIndicesPtr));
@@ -138,14 +138,28 @@ void MPC_MRT_Interface::copyToBuffer(const SystemObservation& mpcInitObservation
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/
-matrix_t MPC_MRT_Interface::getLinearFeedbackGain(scalar_t time) {
+void MPC_MRT_Interface::getLinearFeedbackGain(scalar_t time, matrix_t& K) {
   auto controller = dynamic_cast<LinearController*>(this->getPolicy().controllerPtr_.get());
   if (controller == nullptr) {
     throw std::runtime_error("[MPC_MRT_Interface::getLinearFeedbackGain] Feedback gains only available with linear controller!");
   }
-  matrix_t K;
   controller->getFeedbackGain(time, K);
-  return K;
+}
+
+void MPC_MRT_Interface::getBias(scalar_t time, vector_t& bias) {
+  auto controller = dynamic_cast<LinearController*>(this->getPolicy().controllerPtr_.get());
+  if (controller == nullptr) {
+    throw std::runtime_error("[MPC_MRT_Interface::getBias] Bias only available with linear controller!");
+  }
+  controller->getBias(time, bias);
+}
+
+void MPC_MRT_Interface::getLinearController(LinearController& controller) {
+  LinearController* controller_ptr = dynamic_cast<LinearController*>(this->getPolicy().controllerPtr_.get());
+  if (controller_ptr == nullptr) {
+    throw std::runtime_error("[MPC_MRT_Interface::getLinearController] Need linear controller!");
+  }
+  controller = *controller_ptr;
 }
 
 /******************************************************************************************************/
@@ -160,13 +174,6 @@ ScalarFunctionQuadraticApproximation MPC_MRT_Interface::getValueFunction(scalar_
 /******************************************************************************************************/
 vector_t MPC_MRT_Interface::getStateInputEqualityConstraintLagrangian(scalar_t time, const vector_t& state) const {
   return mpc_.getSolverPtr()->getStateInputEqualityConstraintLagrangian(time, state);
-}
-
-/******************************************************************************************************/
-/******************************************************************************************************/
-/******************************************************************************************************/
-MultiplierCollection MPC_MRT_Interface::getIntermediateDualSolution(scalar_t time) const {
-  return mpc_.getSolverPtr()->getIntermediateDualSolution(time);
 }
 
 }  // namespace ocs2

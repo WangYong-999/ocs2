@@ -34,6 +34,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <ocs2_mpc/MPC_MRT_Interface.h>
 #include <ocs2_oc/oc_problem/OptimalControlProblem.h>
 #include <ocs2_robotic_tools/common/RobotInterface.h>
+#include <ocs2_core/control/LinearController.h>
 
 namespace ocs2 {
 
@@ -106,12 +107,18 @@ class PythonInterface {
    */
   void getMpcSolution(scalar_array_t& t, vector_array_t& x, vector_array_t& u);
 
+  void evaluateMpcSolution(scalar_t current_time, Eigen::Ref<const vector_t> current_state, Eigen::Ref<vector_t> opt_state, Eigen::Ref<vector_t> opt_input);
+
   /**
    * @brief Obtains feedback gain matrix, if the underlying MPC algorithm computes it
    * @param[in] t: Query time
    * @return State-feedback matrix
    */
   matrix_t getLinearFeedbackGain(scalar_t t);
+
+  vector_t getBias(scalar_t t);
+
+  LinearController getLinearController();
 
   /** System dynamics */
   vector_t flowMap(scalar_t t, Eigen::Ref<const vector_t> x, Eigen::Ref<const vector_t> u);
@@ -182,6 +189,8 @@ class PythonInterface {
   }
 
  protected:
+  std::unique_ptr<PenaltyBase> penalty_;
+
   int stateDim_ = -1;  // -1 indicates that it is not initialized
   int inputDim_ = -1;  // -1 indicates that it is not initialized
 

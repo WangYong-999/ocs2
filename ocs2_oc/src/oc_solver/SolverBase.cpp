@@ -64,15 +64,6 @@ void SolverBase::run(scalar_t initTime, const vector_t& initState, scalar_t fina
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/
-void SolverBase::run(scalar_t initTime, const vector_t& initState, scalar_t finalTime, const PrimalSolution& primalSolution) {
-  preRun(initTime, initState, finalTime);
-  runImpl(initTime, initState, finalTime, primalSolution);
-  postRun();
-}
-
-/******************************************************************************************************/
-/******************************************************************************************************/
-/******************************************************************************************************/
 PrimalSolution SolverBase::primalSolution(scalar_t finalTime) const {
   PrimalSolution primalSolution;
   getPrimalSolution(finalTime, &primalSolution);
@@ -102,17 +93,10 @@ void SolverBase::preRun(scalar_t initTime, const vector_t& initState, scalar_t f
 /******************************************************************************************************/
 /******************************************************************************************************/
 void SolverBase::postRun() {
-  if (!synchronizedModules_.empty() || !solverObservers_.empty()) {
+  if (!synchronizedModules_.empty()) {
     const auto solution = primalSolution(getFinalTime());
     for (auto& module : synchronizedModules_) {
       module->postSolverRun(solution);
-    }
-    for (auto& observer : solverObservers_) {
-      observer->extractTermConstraint(getOptimalControlProblem(), solution, getSolutionMetrics());
-      observer->extractTermLagrangianMetrics(getOptimalControlProblem(), solution, getSolutionMetrics());
-      if (getDualSolution() != nullptr) {
-        observer->extractTermMultipliers(getOptimalControlProblem(), *getDualSolution());
-      }
     }
   }
 }

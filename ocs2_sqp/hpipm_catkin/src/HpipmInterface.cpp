@@ -27,6 +27,8 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ******************************************************************************/
 
+#include <iostream>
+
 #include "hpipm_catkin/HpipmInterface.h"
 
 #include <ocs2_core/misc/LinearAlgebra.h>
@@ -145,7 +147,8 @@ class HpipmInterface::Impl {
 
   void verifySizes(const vector_t& x0, std::vector<VectorFunctionLinearApproximation>& dynamics,
                    std::vector<ScalarFunctionQuadraticApproximation>& cost,
-                   std::vector<VectorFunctionLinearApproximation>* constraints) const {
+                   std::vector<VectorFunctionLinearApproximation>* constraints,
+                   std::vector<VectorFunctionLinearApproximation>* ineqConstraints) const {
     if (dynamics.size() != ocpSize_.numStages) {
       throw std::runtime_error("[HpipmInterface] Inconsistent size of dynamics: " + std::to_string(dynamics.size()) + " with " +
                                std::to_string(ocpSize_.numStages) + " number of stages.");
@@ -156,7 +159,13 @@ class HpipmInterface::Impl {
     }
     if (constraints != nullptr) {
       if (constraints->size() != ocpSize_.numStages + 1) {
-        throw std::runtime_error("[HpipmInterface] Inconsistent size of constraints: " + std::to_string(constraints->size()) + " with " +
+        throw std::runtime_error("[HpipmInterface] Inconsistent size of equality constraints: " + std::to_string(constraints->size()) + " with " +
+                                 std::to_string(ocpSize_.numStages + 1) + " nodes.");
+      }
+    }
+    if (ineqConstraints != nullptr) {
+      if (ineqConstraints->size() != ocpSize_.numStages + 1) {
+        throw std::runtime_error("[HpipmInterface] Inconsistent size of inequality constraints: " + std::to_string(ineqConstraints->size()) + " with " +
                                  std::to_string(ocpSize_.numStages + 1) + " nodes.");
       }
     }
@@ -165,9 +174,10 @@ class HpipmInterface::Impl {
 
   hpipm_status solve(const vector_t& x0, std::vector<VectorFunctionLinearApproximation>& dynamics,
                      std::vector<ScalarFunctionQuadraticApproximation>& cost, std::vector<VectorFunctionLinearApproximation>* constraints,
-                     vector_array_t& stateTrajectory, vector_array_t& inputTrajectory, bool verbose) {
+                     std::vector<VectorFunctionLinearApproximation>* ineqConstraints, std::vector<BoundConstraint>* boundConstraints, vector_array_t& stateTrajectory,
+                     vector_array_t& inputTrajectory, bool verbose) {
     const int N = ocpSize_.numStages;
-    verifySizes(x0, dynamics, cost, constraints);
+    verifySizes(x0, dynamics, cost, constraints, ineqConstraints);
 
     // === Dynamics ===
     std::vector<scalar_t*> AA(N, nullptr);
@@ -221,66 +231,205 @@ class HpipmInterface::Impl {
     qq[N] = cost[N].dfdx.data();
 
     // === Constraints ===
-    // for ocs2 --> C*dx + D*du + e = 0
-    // for hpipm --> ug >= C*dx + D*du >= lg
+    std::vector<matrix_t> C(N + 1);
+    std::vector<matrix_t> D(N + 1);
+    std::vector<vector_t> d(N + 1);
+    std::vector<vector_t> upper_bound_mask(N + 1);
+
+    // Raw data for each stage
     std::vector<scalar_t*> CC(N + 1, nullptr);
     std::vector<scalar_t*> DD(N + 1, nullptr);
     std::vector<scalar_t*> llg(N + 1, nullptr);
     std::vector<scalar_t*> uug(N + 1, nullptr);
-    std::vector<ocs2::vector_t> boundData;  // Declare at this scope to keep the data alive while HPIPM has the pointers
 
-    if (constraints != nullptr) {
-      auto& constr = *constraints;
-      boundData.resize(N + 1);
+    bool hasEqualityConstraints = (constraints != nullptr);
+    bool hasInequalityConstraints = (ineqConstraints != nullptr);
 
-      // k = 0, eliminate initial state
-      // numState[0] = 0 --> No need to specify C[0] here
-      if (constr[0].f.size() > 0) {
-        boundData[0] = -constr[0].f;
-        boundData[0].noalias() -= constr[0].dfdx * x0;
-        llg[0] = boundData[0].data();
-        uug[0] = boundData[0].data();
-        DD[0] = constr[0].dfdu.data();
-      }
+    // If we have both constraints, we need to copy the data in order to concatentate it
+    // Equality constraints are of the form
+    //   C * x + D * u == d,
+    // inequalities are
+    //   C * x + D * u >= d.
+    if (hasEqualityConstraints && hasInequalityConstraints) {
+      auto& eqConstr = *constraints;
+      auto& ineqConstr = *ineqConstraints;
 
-      // k = 1 -> (N-1)
-      for (int k = 1; k < N; k++) {
-        if (constr[k].f.size() > 0) {
-          CC[k] = constr[k].dfdx.data();
-          DD[k] = constr[k].dfdu.data();
-          boundData[k] = -constr[k].f;
-          llg[k] = boundData[k].data();
-          uug[k] = boundData[k].data();
+      for (int k = 0; k <= N; k++) {
+        const size_t ne = eqConstr[k].f.size();
+        const size_t ni = ineqConstr[k].f.size();
+        const size_t n = ne + ni;
+        if (n == 0) {
+            continue;
+        }
+
+        d[k].resize(n);
+        d[k] << -eqConstr[k].f, -ineqConstr[k].f;
+        if (k == 0) {
+            d[k].head(ne).noalias() -= eqConstr[k].dfdx * x0;
+            d[k].tail(ni).noalias() -= ineqConstr[k].dfdx * x0;
+        }
+        llg[k] = d[k].data();
+        uug[k] = d[k].data();
+
+        // Mask out upper bounds for the inequality constraints
+        upper_bound_mask[k].setZero(n);
+        upper_bound_mask[k].head(ne).setOnes();
+        d_ocp_qp_set_ug_mask(k, upper_bound_mask[k].data(), &qp_);
+
+        // No need to give CC[0] since initial state is given
+        if (k > 0) {
+            C[k].resize(n, eqConstr[k].dfdx.cols());
+            C[k] << eqConstr[k].dfdx, ineqConstr[k].dfdx;
+            CC[k] = C[k].data();
+        }
+
+        if (k < N) {
+            D[k].resize(n, eqConstr[k].dfdu.cols());
+            D[k] << eqConstr[k].dfdu, ineqConstr[k].dfdu;
+            DD[k] = D[k].data();
         }
       }
 
-      // k = N, no inputs
-      if (constr[N].f.size() > 0) {
-        CC[N] = constr[N].dfdx.data();
-        boundData[N] = -constr[N].f;
-        llg[N] = boundData[N].data();
-        uug[N] = boundData[N].data();
+    // If we only have one or the other, we can directly take pointers to data
+    } else if (hasEqualityConstraints || hasInequalityConstraints) {
+      auto& constr = hasEqualityConstraints ? *constraints : *ineqConstraints;
+
+      for (int k = 0; k <= N; k++) {
+        if (constr[k].f.size() == 0) {
+            continue;
+        }
+
+        d[k] = -constr[k].f;
+        if (k == 0) {
+            d[k].noalias() -= constr[k].dfdx * x0;
+        }
+        llg[k] = d[k].data();
+        uug[k] = d[k].data();
+
+        // If the constraints are inequalities, mask out the upper bound
+        if (hasInequalityConstraints) {
+            upper_bound_mask[k].setZero(d[k].rows());
+            d_ocp_qp_set_ug_mask(k, upper_bound_mask[k].data(), &qp_);
+        }
+
+        // No need to give CC[0] since initial state is given
+        if (k > 0) {
+            CC[k] = constr[k].dfdx.data();
+        }
+
+        if (k < N) {
+            DD[k] = constr[k].dfdu.data();
+        }
       }
     }
 
-    // === Unused ===
-    int** hidxbx = nullptr;
-    scalar_t** hlbx = nullptr;
-    scalar_t** hubx = nullptr;
-    int** hidxbu = nullptr;
-    scalar_t** hlbu = nullptr;
-    scalar_t** hubu = nullptr;
-    scalar_t** hZl = nullptr;
-    scalar_t** hZu = nullptr;
-    scalar_t** hzl = nullptr;
-    scalar_t** hzu = nullptr;
-    int** hidxs = nullptr;
-    scalar_t** hlls = nullptr;
-    scalar_t** hlus = nullptr;
+    // === Slacks ===
+    // L2 slack penalties - only diagonal is stored
+    std::vector<vector_t> Zl(N + 1);
+    std::vector<vector_t> Zu(N + 1);
+
+    // L1 slack penalties
+    std::vector<vector_t> zl(N + 1);
+    std::vector<vector_t> zu(N + 1);
+
+    // Lower bounds on lower and upper slacks
+    std::vector<vector_t> sl(N + 1);
+    std::vector<vector_t> su(N + 1);
+
+    // Slack index variables: used to control which constraints we actually
+    // want to apply the slacks to.
+    std::vector<Eigen::VectorXi> idxs(N + 1);
+
+    // Raw slack data
+    std::vector<scalar_t*> ZZl(N + 1, nullptr);
+    std::vector<scalar_t*> ZZu(N + 1, nullptr);
+    std::vector<scalar_t*> zzu(N + 1, nullptr);
+    std::vector<scalar_t*> zzl(N + 1, nullptr);
+    std::vector<scalar_t*> lls(N + 1, nullptr);
+    std::vector<scalar_t*> lus(N + 1, nullptr);
+    std::vector<int*> iidxs(N + 1, nullptr);
+
+    if (settings_.slacks.enabled) {
+        for (int k = 0; k <= N; k++) {
+          // TODO not all of this is used at k = 0, k = N (some box constraints
+          // not active)
+          // numbers of slacks
+          const size_t nsu = ocpSize_.numInputBoxSlack[k];
+          const size_t nsx = ocpSize_.numStateBoxSlack[k];
+          const size_t nsi = ocpSize_.numIneqSlack[k];
+          const size_t ns = nsu + nsx + nsi;
+
+          Zl[k].setConstant(ns, settings_.slacks.lower_L2_penalty);
+          Zu[k].setConstant(ns, settings_.slacks.upper_L2_penalty);
+          zl[k].setConstant(ns, settings_.slacks.lower_L1_penalty);
+          zu[k].setConstant(ns, settings_.slacks.upper_L1_penalty);
+          sl[k].setConstant(ns, settings_.slacks.lower_low_bound);
+          su[k].setConstant(ns, settings_.slacks.upper_low_bound);
+
+          // numbers of constraints
+          const size_t ncu = ocpSize_.numInputBoxConstraints[k];
+          const size_t ncx = ocpSize_.numStateBoxConstraints[k];
+          const size_t nci = ocpSize_.numIneqConstraints[k];
+          const size_t nc = ncu + ncx + nci;
+
+          // constraints are ordered: input box, state box, general inequalities
+          idxs[k].resize(ns);
+          size_t si = 0;
+          if (k < N && settings_.slacks.input_box) {
+            idxs[k].segment(si, ncu).setLinSpaced(ncu, 0, ncu - 1);
+            si += ncu;
+          }
+          if (k > 0 && settings_.slacks.state_box) {
+            idxs[k].segment(si, ncx).setLinSpaced(ncx, ncu, ncu + ncx - 1);
+            si += ncx;
+          }
+          if (settings_.slacks.poly_ineq) {
+            idxs[k].segment(si, nci).setLinSpaced(nci, ncu + ncx, nc - 1);
+          }
+
+          ZZl[k] = Zl[k].data();
+          ZZu[k] = Zu[k].data();
+          zzl[k] = zl[k].data();
+          zzu[k] = zu[k].data();
+          lls[k] = sl[k].data();
+          lus[k] = su[k].data();
+          iidxs[k] = idxs[k].data();
+        }
+    }
+
+    // State box constraints
+    std::vector<scalar_t*> lbx(N + 1, nullptr);
+    std::vector<scalar_t*> ubx(N + 1, nullptr);
+    std::vector<int*> idxbx(N + 1, nullptr);
+
+    // Input box constraints
+    std::vector<scalar_t*> lbu(N + 1, nullptr);
+    std::vector<scalar_t*> ubu(N + 1, nullptr);
+    std::vector<int*> idxbu(N + 1, nullptr);
+
+    if (boundConstraints != nullptr) {
+        auto& bounds = *boundConstraints;
+
+        if (bounds[0].numStateConstraints() > 0) {
+            for (int k = 1; k <= N; k++) {
+                lbx[k] = bounds[k].state_lb_.data();
+                ubx[k] = bounds[k].state_ub_.data();
+                idxbx[k] = bounds[k].state_idx_.data();
+            }
+        }
+
+        if (bounds[0].numInputConstraints() > 0) {
+            for (int k = 0; k < N; k++) {
+                lbu[k] = bounds[k].input_lb_.data();
+                ubu[k] = bounds[k].input_ub_.data();
+                idxbu[k] = bounds[k].input_idx_.data();
+            }
+        }
+    }
 
     // === Set and solve ===
-    d_ocp_qp_set_all(AA.data(), BB.data(), bb.data(), QQ.data(), SS.data(), RR.data(), qq.data(), rr.data(), hidxbx, hlbx, hubx, hidxbu,
-                     hlbu, hubu, CC.data(), DD.data(), llg.data(), uug.data(), hZl, hZu, hzl, hzu, hidxs, hlls, hlus, &qp_);
+    d_ocp_qp_set_all(AA.data(), BB.data(), bb.data(), QQ.data(), SS.data(), RR.data(), qq.data(), rr.data(), idxbx.data(), lbx.data(), ubx.data(), idxbu.data(),
+                     lbu.data(), ubu.data(), CC.data(), DD.data(), llg.data(), uug.data(), ZZl.data(), ZZu.data(), zzl.data(), zzu.data(), iidxs.data(), lls.data(), lus.data(), &qp_);
     d_ocp_qp_ipm_solve(&qp_, &qpSol_, &arg_, &workspace_);
 
     if (verbose) {
@@ -468,7 +617,7 @@ class HpipmInterface::Impl {
     } else if (hpipmStatus == hpipm_status::NAN_SOL) {
       fprintf(stderr, "Solver failed! NaN in computations\n");
     } else if (hpipmStatus == hpipm_status::INCONS_EQ) {
-      fprintf(stderr, "Solver failed! Unconsistent equality constraints\n");
+      fprintf(stderr, "Solver failed! Inconsistent equality constraints\n");
     } else {
       fprintf(stderr, "Solver failed! Unknown return flag\n");
     }
@@ -533,9 +682,12 @@ void HpipmInterface::resize(OcpSize ocpSize) {
 
 hpipm_status HpipmInterface::solve(const vector_t& x0, std::vector<VectorFunctionLinearApproximation>& dynamics,
                                    std::vector<ScalarFunctionQuadraticApproximation>& cost,
-                                   std::vector<VectorFunctionLinearApproximation>* constraints, vector_array_t& stateTrajectory,
+                                   std::vector<VectorFunctionLinearApproximation>* constraints,
+                                   std::vector<VectorFunctionLinearApproximation>* ineqConstraints,
+                                   std::vector<BoundConstraint>* boundConstraints,
+                                   vector_array_t& stateTrajectory,
                                    vector_array_t& inputTrajectory, bool verbose) {
-  return pImpl_->solve(x0, dynamics, cost, constraints, stateTrajectory, inputTrajectory, verbose);
+  return pImpl_->solve(x0, dynamics, cost, constraints, ineqConstraints, boundConstraints, stateTrajectory, inputTrajectory, verbose);
 }
 
 std::vector<ScalarFunctionQuadraticApproximation> HpipmInterface::getRiccatiCostToGo(const VectorFunctionLinearApproximation& dynamics0,

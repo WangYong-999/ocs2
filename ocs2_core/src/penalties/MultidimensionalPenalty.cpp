@@ -36,7 +36,7 @@ namespace ocs2 {
 namespace {
 
 /** A wrapper class of PenaltyBase to AugmentedPenaltyBase */
-class PenaltyBaseWrapper final : public augmented::AugmentedPenaltyBase {
+class PenaltyBaseWrapper final : public AugmentedPenaltyBase {
  public:
   /** Default constructor */
   PenaltyBaseWrapper(std::unique_ptr<PenaltyBase> penaltyPtr) : penaltyPtr_(std::move(penaltyPtr)) {}
@@ -63,7 +63,7 @@ class PenaltyBaseWrapper final : public augmented::AugmentedPenaltyBase {
 };
 
 std::unique_ptr<PenaltyBaseWrapper> createWrapper(std::unique_ptr<PenaltyBase> penaltyPtr) {
-  return std::make_unique<PenaltyBaseWrapper>(std::move(penaltyPtr));
+  return std::unique_ptr<PenaltyBaseWrapper>(new PenaltyBaseWrapper(std::move(penaltyPtr)));
 }
 
 scalar_t getMultiplier(const vector_t* l, size_t ind) {
@@ -76,8 +76,7 @@ scalar_t getMultiplier(const vector_t* l, size_t ind) {
 /******************************************************************************************************/
 /******************************************************************************************************/
 template <>
-MultidimensionalPenalty::MultidimensionalPenalty<augmented::AugmentedPenaltyBase>(
-    std::vector<std::unique_ptr<augmented::AugmentedPenaltyBase>> penaltyPtrArray)
+MultidimensionalPenalty::MultidimensionalPenalty<AugmentedPenaltyBase>(std::vector<std::unique_ptr<AugmentedPenaltyBase>> penaltyPtrArray)
     : penaltyPtrArray_(std::move(penaltyPtrArray)) {
   if (penaltyPtrArray_.empty()) {
     throw std::runtime_error("[MultidimensionalPenalty::MultidimensionalPenalty] The penalty array cannot be empty!");
@@ -99,8 +98,7 @@ MultidimensionalPenalty::MultidimensionalPenalty<PenaltyBase>(std::vector<std::u
 /******************************************************************************************************/
 /******************************************************************************************************/
 template <>
-MultidimensionalPenalty::MultidimensionalPenalty<augmented::AugmentedPenaltyBase>(
-    std::unique_ptr<augmented::AugmentedPenaltyBase> penaltyPtr) {
+MultidimensionalPenalty::MultidimensionalPenalty<AugmentedPenaltyBase>(std::unique_ptr<AugmentedPenaltyBase> penaltyPtr) {
   penaltyPtrArray_.push_back(std::move(penaltyPtr));
 }
 

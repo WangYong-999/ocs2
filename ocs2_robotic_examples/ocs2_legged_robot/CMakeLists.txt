@@ -10,7 +10,6 @@ set(CATKIN_PACKAGE_DEPENDENCIES
   ocs2_ddp
   ocs2_mpc
   ocs2_sqp
-  ocs2_ipm
   ocs2_robotic_tools
   ocs2_pinocchio_interface
   ocs2_centroidal_model
@@ -88,6 +87,7 @@ add_library(${PROJECT_NAME}
   src/constraint/ZeroForceConstraint.cpp
   src/constraint/NormalVelocityConstraintCppAd.cpp
   src/constraint/ZeroVelocityConstraintCppAd.cpp
+  src/cost/LeggedRobotStateInputQuadraticCost.cpp
   src/initialization/LeggedRobotInitializer.cpp
   src/reference_manager/SwitchedModelReferenceManager.cpp
   src/foot_planner/CubicSpline.cpp
@@ -95,7 +95,6 @@ add_library(${PROJECT_NAME}
   src/foot_planner/SwingTrajectoryPlanner.cpp
   src/gait/Gait.cpp
   src/gait/GaitSchedule.cpp
-  src/gait/LegLogic.cpp
   src/gait/ModeSequenceTemplate.cpp
   src/LeggedRobotInterface.cpp
   src/LeggedRobotPreComputation.cpp

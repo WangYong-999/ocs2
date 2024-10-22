@@ -34,6 +34,5 @@ namespace ocs2 {
 /**
  * Enum class for specifying controller type
  */
-enum class ControllerType { UNKNOWN, FEEDFORWARD, LINEAR, ONNX, BEHAVIORAL };
-
+enum class ControllerType { UNKNOWN, FEEDFORWARD, LINEAR, NEURAL_NETWORK, ONNX, BEHAVIORAL };
 }  // namespace ocs2

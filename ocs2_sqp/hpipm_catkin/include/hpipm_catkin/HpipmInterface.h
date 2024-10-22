@@ -36,9 +36,10 @@ extern "C" {
 }
 
 #include <ocs2_core/Types.h>
-#include <ocs2_oc/oc_problem/OcpSize.h>
+#include <ocs2_core/constraint/BoundConstraint.h>
 
 #include "hpipm_catkin/HpipmInterfaceSettings.h"
+#include "hpipm_catkin/OcpSize.h"
 
 namespace ocs2 {
 
@@ -48,6 +49,7 @@ namespace ocs2 {
  */
 class HpipmInterface {
  public:
+  using OcpSize = hpipm_interface::OcpSize;
   using Settings = hpipm_interface::Settings;
 
   /**
@@ -71,7 +73,8 @@ class HpipmInterface {
    * @param x0 : Initial state (deviation).
    * @param dynamics : Linearized approximation of the discrete dynamics.
    * @param cost : Quadratic approximation of the cost.
-   * @param constraints : Linearized approximation of constraints, all constraints are mapped to inequality constraints in HPIPM.
+   * @param constraints : Linearized approximation of equality constraints, all constraints are mapped to inequality constraints in HPIPM.
+   * @param ineqConstraints : Linearized approximation of inequality constraints.
    * @param [out] stateTrajectory : Solution state (deviation) trajectory.
    * @param [out] inputTrajectory : Solution input (deviation) trajectory.
    * @param verbose : Prints the HPIPM iteration statistics if true.
@@ -84,7 +87,8 @@ class HpipmInterface {
    */
   hpipm_status solve(const vector_t& x0, std::vector<VectorFunctionLinearApproximation>& dynamics,
                      std::vector<ScalarFunctionQuadraticApproximation>& cost, std::vector<VectorFunctionLinearApproximation>* constraints,
-                     vector_array_t& stateTrajectory, vector_array_t& inputTrajectory, bool verbose = false);
+                     std::vector<VectorFunctionLinearApproximation>* ineqConstraints, std::vector<BoundConstraint>* boundConstraints, vector_array_t& stateTrajectory,
+                     vector_array_t& inputTrajectory, bool verbose = false);
 
   /**
    * Return the Riccati cost-to-go for the previously solved problem.

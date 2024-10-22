@@ -53,7 +53,7 @@ namespace ocs2 {
 class LevenbergMarquardtStrategy final : public SearchStrategyBase {
  public:
   /**
-   * Constructor.
+   * constructor.
    *
    * @param [in] baseSettings: The basic settings for the search strategy algorithms.
    * @param [in] settings: The Levenberg Marquardt settings.
@@ -64,15 +64,18 @@ class LevenbergMarquardtStrategy final : public SearchStrategyBase {
   LevenbergMarquardtStrategy(search_strategy::Settings baseSettings, levenberg_marquardt::Settings settings, RolloutBase& rolloutRefStock,
                              OptimalControlProblem& optimalControlProblemRef, std::function<scalar_t(const PerformanceIndex&)> meritFunc);
 
+  /**
+   * Default destructor.
+   */
   ~LevenbergMarquardtStrategy() override = default;
+
   LevenbergMarquardtStrategy(const LevenbergMarquardtStrategy&) = delete;
   LevenbergMarquardtStrategy& operator=(const LevenbergMarquardtStrategy&) = delete;
 
   void reset() override;
 
   bool run(const std::pair<scalar_t, scalar_t>& timePeriod, const vector_t& initState, const scalar_t expectedCost,
-           const LinearController& unoptimizedController, const DualSolution& dualSolution, const ModeSchedule& modeSchedule,
-           search_strategy::SolutionRef solution) override;
+           const LinearController& unoptimizedController, const ModeSchedule& modeSchedule, search_strategy::SolutionRef solution) override;
 
   std::pair<bool, std::string> checkConvergence(bool unreliableControllerIncrement, const PerformanceIndex& previousPerformanceIndex,
                                                 const PerformanceIndex& currentPerformanceIndex) const override;
@@ -83,32 +86,22 @@ class LevenbergMarquardtStrategy final : public SearchStrategyBase {
   matrix_t augmentHamiltonianHessian(const ModelData& modelData, const matrix_t& Hm) const override;
 
  private:
-  /** computes the ratio between actual reduction and predicted reduction */
-  scalar_t reductionToPredictedReduction(const scalar_t actualReduction, const scalar_t expectedReduction) const {
-    if (std::abs(actualReduction) < baseSettings_.minRelCost || expectedReduction <= baseSettings_.minRelCost) {
-      return 1.0;
-    } else if (actualReduction < 0.0) {
-      return 0.0;
-    } else {
-      return actualReduction / expectedReduction;
-    }
-  }
-
   // Levenberg-Marquardt
   struct LevenbergMarquardtModule {
+    scalar_t pho = 1.0;                           // the ratio between actual reduction and predicted reduction
     scalar_t riccatiMultiple = 0.0;               // the Riccati multiple for Tikhonov regularization.
     scalar_t riccatiMultipleAdaptiveRatio = 1.0;  // the adaptive ratio of geometric progression for Riccati multiple.
     size_t numSuccessiveRejections = 0;           // the number of successive rejections of solution.
   };
 
   const levenberg_marquardt::Settings settings_;
-  LevenbergMarquardtModule lmModule_;
+  LevenbergMarquardtModule levenbergMarquardtModule_;
 
   RolloutBase& rolloutRef_;
   OptimalControlProblem& optimalControlProblemRef_;
   std::function<scalar_t(PerformanceIndex)> meritFunc_;
 
-  DualSolution tempDualSolution_;
+  scalar_t avgTimeStepFP_ = 0.0;
 };
 
 }  // namespace ocs2

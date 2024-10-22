@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
   auto mpcnetDummyObserverRosPtr = std::make_shared<ocs2::mpcnet::MpcnetDummyObserverRos>(nodeHandle, robotName);
 
   // visualization
-  auto ballbotDummyVisualization = std::make_shared<BallbotDummyVisualization>(nodeHandle);
+  // auto ballbotDummyVisualization = std::make_shared<ocs2::ballbot::BallbotDummyVisualization>(nodeHandle);
 
   // MPC-Net dummy loop ROS
   const scalar_t controlFrequency = ballbotInterface.mpcSettings().mrtDesiredFrequency_;
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
   ocs2::mpcnet::MpcnetDummyLoopRos mpcnetDummyLoopRos(controlFrequency, rosFrequency, std::move(mpcnetControllerPtr), std::move(rolloutPtr),
                                                       rosReferenceManagerPtr);
   mpcnetDummyLoopRos.addObserver(mpcnetDummyObserverRosPtr);
-  mpcnetDummyLoopRos.addObserver(ballbotDummyVisualization);
+  // mpcnetDummyLoopRos.addObserver(ballbotDummyVisualization);
 
   // initial system observation
   SystemObservation systemObservation;

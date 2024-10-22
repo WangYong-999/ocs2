@@ -48,7 +48,7 @@ ScalarFunctionQuadraticApproximation LoopshapingStateCost::getQuadraticApproxima
                                                                                      const TargetTrajectories& targetTrajectories,
                                                                                      const PreComputation& preComp) const {
   if (this->empty()) {
-    return ScalarFunctionQuadraticApproximation::Zero(x.rows());
+    return ScalarFunctionQuadraticApproximation::Zero(x.rows(), 0);
   }
 
   const LoopshapingPreComputation& preCompLS = cast<LoopshapingPreComputation>(preComp);

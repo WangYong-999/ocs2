@@ -66,8 +66,8 @@ class DoubleIntegratorIntegrationTest : public testing::Test {
       ddpSettings.maxNumIterations_ = 5;
     }
 
-    auto mpcPtr = std::make_unique<GaussNewtonDDP_MPC>(std::move(mpcSettings), std::move(ddpSettings), interface.getRollout(),
-                                                       interface.getOptimalControlProblem(), interface.getInitializer());
+    std::unique_ptr<GaussNewtonDDP_MPC> mpcPtr(new GaussNewtonDDP_MPC(mpcSettings, ddpSettings, interface.getRollout(),
+                                                                      interface.getOptimalControlProblem(), interface.getInitializer()));
     mpcPtr->getSolverPtr()->setReferenceManager(interface.getReferenceManagerPtr());
 
     return mpcPtr;
@@ -153,7 +153,6 @@ TEST_F(DoubleIntegratorIntegrationTest, coldStartMPC) {
   ASSERT_NEAR(observation.state(0), goalState(0), tolerance);
 }
 
-#ifdef NDEBUG
 TEST_F(DoubleIntegratorIntegrationTest, asynchronousTracking) {
   auto mpcPtr = getMpc(true);
   MPC_MRT_Interface mpcInterface(*mpcPtr);
@@ -208,4 +207,3 @@ TEST_F(DoubleIntegratorIntegrationTest, asynchronousTracking) {
 
   ASSERT_NEAR(observation.state(0), goalState(0), tolerance);
 }
-#endif

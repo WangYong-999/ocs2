@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(ocs2_mpcnet_core)
 
+add_compile_options(-std=c++14)
+
 set(CATKIN_PACKAGE_DEPENDENCIES
   pybind11_catkin
   ocs2_mpc
@@ -35,6 +37,8 @@ catkin_package(
 ###########
 ## Build ##
 ###########
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(
   include

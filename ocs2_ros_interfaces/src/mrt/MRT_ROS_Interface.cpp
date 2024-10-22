@@ -74,6 +74,20 @@ void MRT_ROS_Interface::resetMpcNode(const TargetTrajectories& initTargetTraject
   ROS_INFO_STREAM("MPC node has been reset.");
 }
 
+void MRT_ROS_Interface::resetTarget(const TargetTrajectories& target) {
+  ocs2_msgs::reset resetSrv;
+  resetSrv.request.reset = static_cast<uint8_t>(true);
+  resetSrv.request.targetTrajectories = ros_msg_conversions::createTargetTrajectoriesMsg(target);
+
+  while (!mpcResetServiceClient_.waitForExistence(ros::Duration(5.0)) && ::ros::ok() && ::ros::master::check()) {
+    ROS_ERROR_STREAM("Failed to call service to reset MPC, retrying...");
+  }
+
+  mpcResetServiceClient_.call(resetSrv);
+  ROS_INFO_STREAM("MPC node has been reset.");
+
+}
+
 /******************************************************************************************************/
 /******************************************************************************************************/
 /******************************************************************************************************/
@@ -127,6 +141,7 @@ void MRT_ROS_Interface::readPolicyMsg(const ocs2_msgs::mpc_flattened_controller&
   commandData.mpcInitObservation_ = ros_msg_conversions::readObservationMsg(msg.initObservation);
   commandData.mpcTargetTrajectories_ = ros_msg_conversions::readTargetTrajectoriesMsg(msg.planTargetTrajectories);
   performanceIndices = ros_msg_conversions::readPerformanceIndicesMsg(msg.performanceIndices);
+  primalSolution.modeSchedule_ = ros_msg_conversions::readModeScheduleMsg(msg.modeSchedule);
 
   const size_t N = msg.timeTrajectory.size();
   if (N == 0) {
@@ -140,8 +155,6 @@ void MRT_ROS_Interface::readPolicyMsg(const ocs2_msgs::mpc_flattened_controller&
   }
 
   primalSolution.clear();
-
-  primalSolution.modeSchedule_ = ros_msg_conversions::readModeScheduleMsg(msg.modeSchedule);
 
   size_array_t stateDim(N);
   size_array_t inputDim(N);
@@ -190,9 +203,9 @@ void MRT_ROS_Interface::readPolicyMsg(const ocs2_msgs::mpc_flattened_controller&
 /******************************************************************************************************/
 void MRT_ROS_Interface::mpcPolicyCallback(const ocs2_msgs::mpc_flattened_controller::ConstPtr& msg) {
   // read new policy and command from msg
-  auto commandPtr = std::make_unique<CommandData>();
-  auto primalSolutionPtr = std::make_unique<PrimalSolution>();
-  auto performanceIndicesPtr = std::make_unique<PerformanceIndex>();
+  std::unique_ptr<CommandData> commandPtr(new CommandData);
+  std::unique_ptr<PrimalSolution> primalSolutionPtr(new PrimalSolution);
+  std::unique_ptr<PerformanceIndex> performanceIndicesPtr(new PerformanceIndex);
   readPolicyMsg(*msg, *commandPtr, *primalSolutionPtr, *performanceIndicesPtr);
 
   this->moveToBuffer(std::move(commandPtr), std::move(primalSolutionPtr), std::move(performanceIndicesPtr));
