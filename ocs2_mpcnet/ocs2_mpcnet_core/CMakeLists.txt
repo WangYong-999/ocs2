@@ -14,7 +14,12 @@ find_package(catkin REQUIRED COMPONENTS
   ${CATKIN_PACKAGE_DEPENDENCIES}
 )
 
-find_package(onnxruntime REQUIRED)
+#find_package(onnxruntime REQUIRED)
+set(onnxruntime_DIR "/home/yong/.local")
+set(onnxruntime_INCLUDE_DIRS "${onnxruntime_DIR}/include")
+set(onnxruntime_LIBRARIES "${onnxruntime_DIR}/lib")
+link_directories(${onnxruntime_LIBRARIES})
+set(onnxruntime_LIBRARIES "${onnxruntime_DIR}/lib/libonnxruntime.so")
 
 # Generate compile_commands.json for clang tools
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -39,6 +44,8 @@ catkin_package(
 ###########
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+include_directories(${onnxruntime_INCLUDE_DIRS})
 
 include_directories(
   include

@@ -51,7 +51,7 @@ OcpSize extractSizesFromProblem(const std::vector<VectorFunctionLinearApproximat
                                 const std::vector<VectorFunctionLinearApproximation>* constraints,
                                 const std::vector<VectorFunctionLinearApproximation>* ineqConstraints,
                                 const std::vector<BoundConstraint>* boundConstraints,
-                                bool useSlack, bool useInputBoxSlack, bool useStateBoxSlack, bool usePolyIneqSlack) {
+                                bool useSlack) {
   const int numStages = dynamics.size();
 
   OcpSize problemSize(dynamics.size());
@@ -89,23 +89,9 @@ OcpSize extractSizesFromProblem(const std::vector<VectorFunctionLinearApproximat
   // Slack variables
   if (useSlack) {
     for (int k = 0; k < numStages + 1; k++) {
-      if (useInputBoxSlack && k < numStages) {
-          problemSize.numInputBoxSlack[k] = problemSize.numInputBoxConstraints[k];
-      } else {
-          problemSize.numInputBoxSlack[k] = 0;
-      }
-
-      if (useStateBoxSlack && k > 0) {
-          problemSize.numStateBoxSlack[k] = problemSize.numStateBoxConstraints[k];
-      } else {
-          problemSize.numStateBoxSlack[k] = 0;
-      }
-
-      if (usePolyIneqSlack) {
-          problemSize.numIneqSlack[k] = problemSize.numIneqConstraints[k];
-      } else {
-          problemSize.numIneqSlack[k] = 0;
-      }
+      problemSize.numIneqSlack[k] = problemSize.numIneqConstraints[k];
+      problemSize.numStateBoxSlack[k] = problemSize.numStateBoxConstraints[k];
+      problemSize.numInputBoxSlack[k] = problemSize.numInputBoxConstraints[k];
     }
   }
 
